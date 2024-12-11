@@ -35,6 +35,15 @@
         "com.unity.xr.openxr": "1.13.0"
       }
     },
+    "com.unity.ide.rider": {
+      "version": "3.0.34",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.ext.nunit": "1.0.6"
+      },
+      "url": "https://packages.unity.com"
+    },
     "com.unity.ide.visualstudio": {
       "version": "2.0.22",
       "depth": 0,
@@ -212,7 +221,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.xr.openxr": {
-      "version": "1.13.1",
+      "version": "1.13.2",
       "depth": 0,
       "source": "registry",
       "dependencies": {

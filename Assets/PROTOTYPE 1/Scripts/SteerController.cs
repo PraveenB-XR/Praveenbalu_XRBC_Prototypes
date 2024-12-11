@@ -1,12 +1,10 @@
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.XR.Interaction.Toolkit;
-using UnityEngine.XR.Interaction.Toolkit.Interactors;
-using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 namespace UnityEngine.XR.Content.Interaction
 {
-    public class SteeringController : XRBaseInteractable
+    public class SteerController : UnityEngine.XR.Interaction.Toolkit.Interactables.XRBaseInteractable
     {
         const float k_ModeSwitchDeadZone = 0.1f;
 
@@ -45,34 +43,41 @@ namespace UnityEngine.XR.Content.Interaction
             }
         }
 
-        [SerializeField]
-        Transform m_Handle = null;
+        [Header("Steering Settings")]
+        [SerializeField] Transform m_Handle = null;
+        [SerializeField, Range(0.0f, 1.0f)] float m_Value = 0.5f;
+        [SerializeField] bool m_ClampedMotion = true;
+        [SerializeField] float m_MaxAngle = 450f;
+        [SerializeField] float m_MinAngle = -450f;
+        [SerializeField] float m_ReturnSpeed = 100f;
+        [SerializeField] float m_PositionTrackedRadius = 0.1f;
+        [SerializeField] float m_TwistSensitivity = 1.5f;
 
-        [SerializeField]
-        [Range(0.0f, 1.0f)]
-        float m_Value = 0.5f;
+        [Header("Car Movement")]
+        [SerializeField] private float m_MaxSpeed = 15f;
+        [SerializeField] private float m_AccelerationForce = 1500f;
+        [SerializeField] private float m_MaxTurnAngle = 45f;
+        [SerializeField] private float m_TurnTorqueFactor = 2f;
+        [SerializeField] private float m_SteeringSensitivity = 1f;
+        [SerializeField] private float m_StabilityForce = 20f;
+        [SerializeField] private float m_MinTurnSpeed = 5f;
 
-        [SerializeField]
-        bool m_ClampedMotion = true;
+        [Header("Deceleration")]
+        [Tooltip("Initial deceleration force applied opposite of travel direction after trigger release.")]
+        [SerializeField] private float m_InitialDecelerationForce = 500f;
+        [Tooltip("Time in seconds over which deceleration force is linearly reduced to zero.")]
+        [SerializeField] private float m_DecelerationDuration = 2f;
 
-        [SerializeField]
-        float m_MaxAngle = 450f;
-
-        [SerializeField]
-        float m_MinAngle = -450f;
-
-        [SerializeField]
-        float m_ReturnSpeed = 100f;
-
-        [SerializeField]
-        float m_PositionTrackedRadius = 0.1f;
-
-        [SerializeField]
-        float m_TwistSensitivity = 1.5f;
+        [Header("Audio")]
+        [SerializeField] private AudioSource m_EngineAudioSource;
 
         public UnityEvent<float> onValueChange = new UnityEvent<float>();
 
-        IXRSelectInteractor m_Interactor;
+        private Rigidbody m_CarRigidbody;
+        private Transform m_CarTransform;
+        private float m_CurrentSteerAngle;
+
+        UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor m_Interactor;
         bool m_PositionDriven = false;
         bool m_UpVectorDriven = false;
         TrackedRotation m_PositionAngles = new TrackedRotation();
@@ -80,11 +85,41 @@ namespace UnityEngine.XR.Content.Interaction
         TrackedRotation m_ForwardVectorAngles = new TrackedRotation();
         float m_BaseKnobRotation = 0.0f;
         bool m_IsGrabbed = false;
+        private bool m_IsAccelerating = false;
+
+        // Deceleration state
+        private bool m_IsDecelerating = false;
+        private float m_DecelerationStartTime;
 
         void Start()
         {
             SetValue(m_Value);
             SetKnobRotation(ValueToRotation());
+
+            m_CarTransform = transform.parent;
+            if (m_CarTransform != null)
+            {
+                m_CarRigidbody = m_CarTransform.GetComponent<Rigidbody>();
+                if (m_CarRigidbody == null)
+                {
+                    Debug.LogError("No Rigidbody found on car parent!");
+                }
+                else
+                {
+                    m_CarRigidbody.centerOfMass = new Vector3(0, -0.5f, 0);
+                    m_CarRigidbody.maxAngularVelocity = 7;
+                }
+            }
+            else
+            {
+                Debug.LogError("Steering wheel must be a child of the car!");
+            }
+
+            if (m_EngineAudioSource != null)
+            {
+                m_EngineAudioSource.Stop();
+                m_EngineAudioSource.loop = true;
+            }
         }
 
         protected override void OnEnable()
@@ -92,12 +127,16 @@ namespace UnityEngine.XR.Content.Interaction
             base.OnEnable();
             selectEntered.AddListener(StartGrab);
             selectExited.AddListener(EndGrab);
+            activated.AddListener(OnActivated);
+            deactivated.AddListener(OnDeactivated);
         }
 
         protected override void OnDisable()
         {
             selectEntered.RemoveListener(StartGrab);
             selectExited.RemoveListener(EndGrab);
+            activated.RemoveListener(OnActivated);
+            deactivated.RemoveListener(OnDeactivated);
             base.OnDisable();
         }
 
@@ -118,6 +157,28 @@ namespace UnityEngine.XR.Content.Interaction
             m_Interactor = null;
         }
 
+        void OnActivated(ActivateEventArgs args)
+        {
+            m_IsAccelerating = true;
+            m_IsDecelerating = false; // cancel any deceleration
+
+            if (m_EngineAudioSource != null && !m_EngineAudioSource.isPlaying)
+            {
+                m_EngineAudioSource.Play();
+            }
+        }
+
+        void OnDeactivated(DeactivateEventArgs args)
+        {
+            m_IsAccelerating = false;
+            StartDeceleration();
+
+            if (m_EngineAudioSource != null && m_EngineAudioSource.isPlaying)
+            {
+                m_EngineAudioSource.Stop();
+            }
+        }
+
         public override void ProcessInteractable(XRInteractionUpdateOrder.UpdatePhase updatePhase)
         {
             base.ProcessInteractable(updatePhase);
@@ -130,8 +191,13 @@ namespace UnityEngine.XR.Content.Interaction
                 }
                 else if (!m_IsGrabbed)
                 {
-                    // Return to center when not grabbed
                     ReturnToCenter();
+                }
+
+                if (m_CarRigidbody != null)
+                {
+                    ApplyCarPhysics();
+                    UpdateXRRig();
                 }
             }
         }
@@ -143,13 +209,15 @@ namespace UnityEngine.XR.Content.Interaction
                 float newValue = Mathf.MoveTowards(m_Value, 0.5f, m_ReturnSpeed * Time.deltaTime / (m_MaxAngle - m_MinAngle));
                 SetValue(newValue);
                 SetKnobRotation(ValueToRotation());
+                m_CurrentSteerAngle = 0f;
             }
         }
 
         void UpdateRotation(bool freshCheck = false)
         {
-            var interactorTransform = m_Interactor.GetAttachTransform(this);
+            if (m_Interactor == null) return;
 
+            var interactorTransform = m_Interactor.GetAttachTransform(this);
             var localOffset = transform.InverseTransformVector(interactorTransform.position - m_Handle.position);
             localOffset.y = 0.0f;
             var radiusOffset = transform.TransformVector(localOffset).magnitude;
@@ -220,6 +288,77 @@ namespace UnityEngine.XR.Content.Interaction
 
             var knobValue = (knobRotation - m_MinAngle) / (m_MaxAngle - m_MinAngle);
             SetValue(knobValue);
+
+            m_CurrentSteerAngle = Mathf.Lerp(-m_MaxTurnAngle, m_MaxTurnAngle, knobValue) * m_SteeringSensitivity;
+        }
+
+        void ApplyCarPhysics()
+        {
+            if (m_CarRigidbody == null) return;
+
+            Vector3 currentVelocity = m_CarRigidbody.velocity;
+            float currentSpeed = currentVelocity.magnitude;
+
+            // If accelerating and below max speed, apply forward force
+            if (m_IsAccelerating && currentSpeed < m_MaxSpeed)
+            {
+                Vector3 forwardForce = m_CarTransform.forward * m_AccelerationForce * Time.fixedDeltaTime;
+                m_CarRigidbody.AddForce(forwardForce, ForceMode.Acceleration);
+            }
+            else if (!m_IsAccelerating && m_IsDecelerating && currentSpeed > 0.1f)
+            {
+                // Apply deceleration force linearly decreasing over m_DecelerationDuration
+                float elapsed = Time.time - m_DecelerationStartTime;
+                if (elapsed < m_DecelerationDuration)
+                {
+                    float t = elapsed / m_DecelerationDuration;
+                    float decelFactor = 1f - t;
+                    float currentDecelForce = m_InitialDecelerationForce * decelFactor;
+
+                    Vector3 decelForce = -currentVelocity.normalized * currentDecelForce * Time.fixedDeltaTime;
+                    m_CarRigidbody.AddForce(decelForce, ForceMode.Acceleration);
+                }
+                else
+                {
+                    // Deceleration complete
+                    m_IsDecelerating = false;
+                }
+            }
+
+            // Only turn above min turn speed
+            if (currentSpeed > m_MinTurnSpeed)
+            {
+                float turnRate = m_CurrentSteerAngle * m_TurnTorqueFactor;
+                float speedFactor = Mathf.InverseLerp(0f, m_MaxSpeed, currentSpeed);
+                turnRate *= Mathf.Lerp(1f, 0.5f, speedFactor);
+
+                m_CarTransform.Rotate(Vector3.up, turnRate * Time.fixedDeltaTime);
+
+                Vector3 forwardVelocity = Vector3.Project(currentVelocity, m_CarTransform.forward);
+                Vector3 sideVelocity = Vector3.Project(currentVelocity, m_CarTransform.right);
+                sideVelocity = Vector3.Lerp(sideVelocity, Vector3.zero, Time.fixedDeltaTime * 5f);
+                m_CarRigidbody.velocity = forwardVelocity + sideVelocity;
+
+                float downforce = Mathf.Lerp(0f, m_StabilityForce, Mathf.Abs(m_CurrentSteerAngle) / m_MaxTurnAngle);
+                m_CarRigidbody.AddForce(-m_CarTransform.up * downforce * currentSpeed, ForceMode.Force);
+            }
+
+            // Keep car upright
+            Vector3 carUp = m_CarTransform.up;
+            if (Vector3.Dot(carUp, Vector3.up) < 0.99f)
+            {
+                Quaternion targetRotation = Quaternion.FromToRotation(carUp, Vector3.up) * m_CarTransform.rotation;
+                m_CarRigidbody.MoveRotation(Quaternion.Slerp(m_CarRigidbody.rotation, targetRotation, Time.fixedDeltaTime * 5f));
+            }
+        }
+
+        private void UpdateXRRig()
+        {
+            var xrRig = FindObjectOfType<Unity.XR.CoreUtils.XROrigin>()?.transform;
+            if (xrRig != null && xrRig.parent != m_CarTransform)
+            {
+                xrRig.SetParent(m_CarTransform, true);
+            }
         }
 
         void SetKnobRotation(float angle)
@@ -257,6 +396,17 @@ namespace UnityEngine.XR.Content.Interaction
                 angleDelta = -(max - angleDelta);
 
             return angleDelta * angleSign;
+        }
+
+        /// <summary>
+        /// Called when trigger is released to start a deceleration phase.
+        /// Over m_DecelerationDuration seconds, a deceleration force is applied
+        /// that linearly decreases from m_InitialDecelerationForce to zero.
+        /// </summary>
+        void StartDeceleration()
+        {
+            m_IsDecelerating = true;
+            m_DecelerationStartTime = Time.time;
         }
     }
 }

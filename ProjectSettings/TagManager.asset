@@ -9,15 +9,16 @@ TagManager:
   - Destroyer
   - MiniWorldCamera
   - Water
+  - Grabbable
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Vehicle
   - Water
   - UI
-  - 
-  - 
+  - XR Rig
+  - Steering
   - 
   - 
   - 
