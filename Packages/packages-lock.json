@@ -31,8 +31,8 @@
       "depth": 0,
       "source": "builtin",
       "dependencies": {
-        "com.unity.xr.oculus": "4.4.0",
-        "com.unity.xr.openxr": "1.13.1"
+        "com.unity.xr.oculus": "4.3.0",
+        "com.unity.xr.openxr": "1.13.0"
       }
     },
     "com.unity.ide.visualstudio": {
