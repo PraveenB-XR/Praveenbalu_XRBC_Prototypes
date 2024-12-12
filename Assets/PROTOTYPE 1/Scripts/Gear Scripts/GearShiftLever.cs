@@ -10,6 +10,12 @@ namespace UnityEngine.XR.Content.Interaction
         [System.Serializable]
         public class GearChangeEvent : UnityEvent<int> { }
 
+        [System.Serializable]
+        public class GearSpeed
+        {
+            public float maxSpeed = 20f;
+        }
+
         [Header("References")]
         [SerializeField]
         Transform m_Handle = null;
@@ -38,6 +44,18 @@ namespace UnityEngine.XR.Content.Interaction
         [SerializeField]
         float m_MaxPosition = 0.25f;
 
+        [Header("Gear Speed Settings")]
+        [SerializeField] 
+        private GearSpeed[] m_GearSpeeds = new GearSpeed[6] 
+        {
+            new GearSpeed { maxSpeed = 20f },  // 1st gear
+            new GearSpeed { maxSpeed = 40f },  // 2nd gear
+            new GearSpeed { maxSpeed = 60f },  // 3rd gear
+            new GearSpeed { maxSpeed = 80f },  // 4th gear
+            new GearSpeed { maxSpeed = 100f }, // 5th gear
+            new GearSpeed { maxSpeed = 20f }   // Reverse gear
+        };
+
         [SerializeField]
         GearChangeEvent m_OnGearChange = new GearChangeEvent();
 
@@ -52,20 +70,17 @@ namespace UnityEngine.XR.Content.Interaction
         float m_BaseZPosition;
         float[] m_GearOffsets;
 
-        readonly string[] m_GearDisplayStrings = new string[]
-        {
-            "R",
-            "N",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5"
-        };
-
-        public int currentGear => m_CurrentGear;
+        public int CurrentGearNumber => m_CurrentGear;
+        public float CurrentGearMaxSpeed => GetCurrentGearMaxSpeed();
         public GearChangeEvent onGearChange => m_OnGearChange;
         public bool isLocked => m_IsLocked;
+
+        private float GetCurrentGearMaxSpeed()
+        {
+            if (m_CurrentGear == 0) return 0f; // Neutral
+            if (m_CurrentGear == -1) return -m_GearSpeeds[5].maxSpeed; // Reverse
+            return m_GearSpeeds[m_CurrentGear - 1].maxSpeed; // Forward gears
+        }
 
         void OnValidate()
         {
@@ -248,11 +263,7 @@ namespace UnityEngine.XR.Content.Interaction
         {
             if (m_GearDisplayText != null)
             {
-                int arrayIndex = m_CurrentGear + 1;
-                if (arrayIndex >= 0 && arrayIndex < m_GearDisplayStrings.Length)
-                {
-                    m_GearDisplayText.text = m_GearDisplayStrings[arrayIndex];
-                }
+                m_GearDisplayText.text = m_CurrentGear.ToString();
             }
         }
 
@@ -271,18 +282,8 @@ namespace UnityEngine.XR.Content.Interaction
 
             Vector3 targetPosition = m_InitialPosition;
             targetPosition.z = m_BaseZPosition + m_GearOffsets[m_CurrentGear + 1];
-
-            float elapsedTime = 0f;
-            Vector3 startPosition = m_Handle.localPosition;
-
-            while (elapsedTime < m_GearLockDuration)
-            {
-                elapsedTime += Time.deltaTime;
-                float t = Mathf.SmoothStep(0, 1, elapsedTime / m_GearLockDuration);
-                m_Handle.localPosition = Vector3.Lerp(startPosition, targetPosition, t);
-                yield return null;
-            }
-
+            
+            // Snap directly to position instead of lerping
             m_Handle.localPosition = targetPosition;
             m_LockedPosition = targetPosition;
 

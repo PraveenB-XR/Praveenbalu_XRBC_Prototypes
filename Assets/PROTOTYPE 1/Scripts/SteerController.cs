@@ -63,19 +63,21 @@ namespace UnityEngine.XR.Content.Interaction
         [SerializeField] private float m_MinTurnSpeed = 5f;
 
         [Header("Deceleration")]
-        [Tooltip("Initial deceleration force applied opposite of travel direction after trigger release.")]
         [SerializeField] private float m_InitialDecelerationForce = 500f;
-        [Tooltip("Time in seconds over which deceleration force is linearly reduced to zero.")]
         [SerializeField] private float m_DecelerationDuration = 2f;
 
         [Header("Audio")]
         [SerializeField] private AudioSource m_EngineAudioSource;
+        [SerializeField] private AudioSource m_GearMaxSpeedAudioSource;
+        [SerializeField] private AudioClip m_GearMaxSpeedSound;
 
         public UnityEvent<float> onValueChange = new UnityEvent<float>();
 
         private Rigidbody m_CarRigidbody;
         private Transform m_CarTransform;
         private float m_CurrentSteerAngle;
+        private GearShiftLever m_GearShifter;
+        private bool m_HasPlayedMaxSpeedSound = false;
 
         UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor m_Interactor;
         bool m_PositionDriven = false;
@@ -86,10 +88,15 @@ namespace UnityEngine.XR.Content.Interaction
         float m_BaseKnobRotation = 0.0f;
         bool m_IsGrabbed = false;
         private bool m_IsAccelerating = false;
-
-        // Deceleration state
         private bool m_IsDecelerating = false;
         private float m_DecelerationStartTime;
+
+        private float GetGearMaxSpeed()
+        {
+            if (m_GearShifter == null) return m_MaxSpeed;
+            float gearMaxSpeed = m_GearShifter.CurrentGearMaxSpeed;
+            return gearMaxSpeed != 0 ? gearMaxSpeed : m_MaxSpeed;
+        }
 
         void Start()
         {
@@ -120,6 +127,15 @@ namespace UnityEngine.XR.Content.Interaction
                 m_EngineAudioSource.Stop();
                 m_EngineAudioSource.loop = true;
             }
+
+            if (m_GearMaxSpeedAudioSource == null)
+            {
+                m_GearMaxSpeedAudioSource = gameObject.AddComponent<AudioSource>();
+                m_GearMaxSpeedAudioSource.playOnAwake = false;
+                m_GearMaxSpeedAudioSource.spatialBlend = 1.0f;
+            }
+
+            m_GearShifter = m_CarTransform.GetComponentInChildren<GearShiftLever>();
         }
 
         protected override void OnEnable()
@@ -160,7 +176,7 @@ namespace UnityEngine.XR.Content.Interaction
         void OnActivated(ActivateEventArgs args)
         {
             m_IsAccelerating = true;
-            m_IsDecelerating = false; // cancel any deceleration
+            m_IsDecelerating = false;
 
             if (m_EngineAudioSource != null && !m_EngineAudioSource.isPlaying)
             {
@@ -299,15 +315,29 @@ namespace UnityEngine.XR.Content.Interaction
             Vector3 currentVelocity = m_CarRigidbody.velocity;
             float currentSpeed = currentVelocity.magnitude;
 
-            // If accelerating and below max speed, apply forward force
-            if (m_IsAccelerating && currentSpeed < m_MaxSpeed)
+            float currentMaxSpeed = GetGearMaxSpeed();
+            bool isReverse = m_GearShifter != null && m_GearShifter.CurrentGearNumber == -1;
+
+            if (m_IsAccelerating)
             {
-                Vector3 forwardForce = m_CarTransform.forward * m_AccelerationForce * Time.fixedDeltaTime;
-                m_CarRigidbody.AddForce(forwardForce, ForceMode.Acceleration);
+                if (currentSpeed < Mathf.Abs(currentMaxSpeed))
+                {
+                    Vector3 forwardForce = m_CarTransform.forward * m_AccelerationForce * Time.fixedDeltaTime;
+                    if (isReverse) forwardForce = -forwardForce;
+                    m_CarRigidbody.AddForce(forwardForce, ForceMode.Acceleration);
+                    m_HasPlayedMaxSpeedSound = false;
+                }
+                else if (!m_HasPlayedMaxSpeedSound)
+                {
+                    if (m_GearMaxSpeedAudioSource != null && m_GearMaxSpeedSound != null)
+                    {
+                        m_GearMaxSpeedAudioSource.PlayOneShot(m_GearMaxSpeedSound);
+                    }
+                    m_HasPlayedMaxSpeedSound = true;
+                }
             }
             else if (!m_IsAccelerating && m_IsDecelerating && currentSpeed > 0.1f)
             {
-                // Apply deceleration force linearly decreasing over m_DecelerationDuration
                 float elapsed = Time.time - m_DecelerationStartTime;
                 if (elapsed < m_DecelerationDuration)
                 {
@@ -320,12 +350,10 @@ namespace UnityEngine.XR.Content.Interaction
                 }
                 else
                 {
-                    // Deceleration complete
                     m_IsDecelerating = false;
                 }
             }
 
-            // Only turn above min turn speed
             if (currentSpeed > m_MinTurnSpeed)
             {
                 float turnRate = m_CurrentSteerAngle * m_TurnTorqueFactor;
@@ -343,7 +371,6 @@ namespace UnityEngine.XR.Content.Interaction
                 m_CarRigidbody.AddForce(-m_CarTransform.up * downforce * currentSpeed, ForceMode.Force);
             }
 
-            // Keep car upright
             Vector3 carUp = m_CarTransform.up;
             if (Vector3.Dot(carUp, Vector3.up) < 0.99f)
             {
@@ -398,11 +425,6 @@ namespace UnityEngine.XR.Content.Interaction
             return angleDelta * angleSign;
         }
 
-        /// <summary>
-        /// Called when trigger is released to start a deceleration phase.
-        /// Over m_DecelerationDuration seconds, a deceleration force is applied
-        /// that linearly decreases from m_InitialDecelerationForce to zero.
-        /// </summary>
         void StartDeceleration()
         {
             m_IsDecelerating = true;

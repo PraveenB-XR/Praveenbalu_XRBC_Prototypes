@@ -1927,13 +1927,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1378063423}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.87384915, y: -0.09341865, z: 0.43950024, w: 0.18574235}
+  m_LocalRotation: {x: -0.6611683, y: -0.14164935, z: 0.12911712, w: -0.7253419}
   m_LocalPosition: {x: 0, y: 3, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 156, y: -53.4, z: 0}
+  m_LocalEulerAnglesHint: {x: 84.7, y: -337.9, z: 0}
 --- !u!114 &1378063426
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2419,6 +2419,13 @@ MonoBehaviour:
   m_SnapToGears: 1
   m_MinPosition: -0.02
   m_MaxPosition: 0.099999994
+  m_GearSpeeds:
+  - maxSpeed: 20
+  - maxSpeed: 40
+  - maxSpeed: 60
+  - maxSpeed: 80
+  - maxSpeed: 100
+  - maxSpeed: 20
   m_OnGearChange:
     m_PersistentCalls:
       m_Calls: []
@@ -2720,7 +2727,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
       propertyPath: m_MaxSpeed
-      value: 100
+      value: 120
       objectReference: {fileID: 0}
     - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
       propertyPath: m_TurnSpeed
@@ -2747,6 +2754,10 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 723915448}
     - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
+      propertyPath: m_GearMaxSpeedSound
+      value: 
+      objectReference: {fileID: 8300000, guid: 1cf9666285dac6849a27ff3cdeb7f6be, type: 3}
+    - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
       propertyPath: m_SteeringSensitivity
       value: 1.5
       objectReference: {fileID: 0}
@@ -2754,6 +2765,10 @@ PrefabInstance:
       propertyPath: m_Colliders.Array.data[0]
       value: 
       objectReference: {fileID: 8624765292737421551}
+    - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
+      propertyPath: m_GearMaxSpeedAudioSource
+      value: 
+      objectReference: {fileID: 723915448}
     - target: {fileID: 3197429496694716106, guid: e66c26fde284ba9468e2d512f97dab4d, type: 3}
       propertyPath: m_InitialDecelerationForce
       value: 800
@@ -5156,6 +5171,10 @@ PrefabInstance:
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 6464163175050406612, guid: 0272d5b08108c7543b70c3ccbcd7249c, type: 3}
+      propertyPath: m_Enabled
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8419559929023539609, guid: 0272d5b08108c7543b70c3ccbcd7249c, type: 3}
       propertyPath: m_Enabled
       value: 0
       objectReference: {fileID: 0}
