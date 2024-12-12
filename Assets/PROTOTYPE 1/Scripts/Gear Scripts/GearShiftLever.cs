@@ -1,5 +1,7 @@
 using UnityEngine.Events;
 using UnityEngine.XR.Interaction.Toolkit;
+using System.Collections;
+using TMPro;
 
 namespace UnityEngine.XR.Content.Interaction
 {
@@ -8,47 +10,104 @@ namespace UnityEngine.XR.Content.Interaction
         [System.Serializable]
         public class GearChangeEvent : UnityEvent<int> { }
 
+        [Header("References")]
         [SerializeField]
         Transform m_Handle = null;
-
         [SerializeField]
-        int m_CurrentGear = 0; // -1 = Reverse, 0 = Neutral, 1-5 = Forward gears
-
+        AudioSource m_AudioSource = null;
         [SerializeField]
-        float m_GearSpacing = 0.1f; // Distance between gear positions
+        AudioClip m_GearShiftSound = null;
+        [SerializeField]
+        TextMeshProUGUI m_GearDisplayText = null;
+        [SerializeField]
+        TextMeshProUGUI m_ClutchStatusText = null;
 
+        [Header("Gear Settings")]
+        [SerializeField]
+        int m_CurrentGear = 0;
+        [SerializeField]
+        float m_GearSpacing = 0.05f;
+        [SerializeField]
+        float m_GearLockDuration = 1.0f;
         [SerializeField]
         bool m_SnapToGears = true;
+
+        [Header("Movement Limits")]
+        [SerializeField]
+        float m_MinPosition = -0.05f;
+        [SerializeField]
+        float m_MaxPosition = 0.25f;
 
         [SerializeField]
         GearChangeEvent m_OnGearChange = new GearChangeEvent();
 
         UnityEngine.XR.Interaction.Toolkit.Interactors.IXRSelectInteractor m_Interactor;
         Vector3 m_InitialPosition;
+        Vector3 m_LockedPosition;
         bool m_IsGrabbed;
-        
-        // Gear positions (local Z positions)
-        readonly float[] m_GearPositions = new float[] 
+        bool m_IsLocked;
+        bool m_IsTransitioning;
+        bool m_IsTriggerPressed;
+        bool m_WasGearShifted;
+        float m_BaseZPosition;
+        float[] m_GearOffsets;
+
+        readonly string[] m_GearDisplayStrings = new string[]
         {
-            -0.2f,  // Reverse (-1)
-            0f,     // Neutral (0)
-            0.1f,   // First (1)
-            0.2f,   // Second (2)
-            0.3f,   // Third (3)
-            0.4f,   // Fourth (4)
-            0.5f    // Fifth (5)
+            "R",
+            "N",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
         };
 
         public int currentGear => m_CurrentGear;
         public GearChangeEvent onGearChange => m_OnGearChange;
+        public bool isLocked => m_IsLocked;
+
+        void OnValidate()
+        {
+            m_MinPosition = -m_GearSpacing;
+            m_MaxPosition = m_GearSpacing * 5f;
+            UpdateGearOffsets();
+        }
+
+        void UpdateGearOffsets()
+        {
+            m_GearOffsets = new float[]
+            {
+                -m_GearSpacing,
+                0f,
+                m_GearSpacing,
+                m_GearSpacing * 2f,
+                m_GearSpacing * 3f,
+                m_GearSpacing * 4f,
+                m_GearSpacing * 5f
+            };
+        }
 
         void Start()
         {
+            UpdateGearOffsets();
+
             if (m_Handle != null)
             {
                 m_InitialPosition = m_Handle.localPosition;
+                m_BaseZPosition = m_InitialPosition.z;
                 UpdateGearPosition(m_CurrentGear);
             }
+
+            if (m_AudioSource == null)
+            {
+                m_AudioSource = gameObject.AddComponent<AudioSource>();
+                m_AudioSource.playOnAwake = false;
+                m_AudioSource.spatialBlend = 1.0f;
+            }
+
+            UpdateGearDisplayText();
+            UpdateClutchUI();
         }
 
         protected override void OnEnable()
@@ -56,12 +115,16 @@ namespace UnityEngine.XR.Content.Interaction
             base.OnEnable();
             selectEntered.AddListener(StartGrab);
             selectExited.AddListener(EndGrab);
+            activated.AddListener(OnTriggerPressed);
+            deactivated.AddListener(OnTriggerReleased);
         }
 
         protected override void OnDisable()
         {
             selectEntered.RemoveListener(StartGrab);
             selectExited.RemoveListener(EndGrab);
+            activated.RemoveListener(OnTriggerPressed);
+            deactivated.RemoveListener(OnTriggerReleased);
             base.OnDisable();
         }
 
@@ -69,6 +132,15 @@ namespace UnityEngine.XR.Content.Interaction
         {
             m_Interactor = args.interactorObject;
             m_IsGrabbed = true;
+            m_WasGearShifted = false;
+
+            // Move interactor's attach transform to gear position
+            if (m_Interactor != null && m_Handle != null)
+            {
+                var attachTransform = m_Interactor.GetAttachTransform(this);
+                attachTransform.position = m_Handle.position;
+                attachTransform.rotation = m_Handle.rotation;
+            }
         }
 
         void EndGrab(SelectExitEventArgs args)
@@ -79,13 +151,30 @@ namespace UnityEngine.XR.Content.Interaction
             }
             m_Interactor = null;
             m_IsGrabbed = false;
+            m_IsTriggerPressed = false;
+            m_WasGearShifted = false;
+            UpdateClutchUI();
+        }
+
+        void OnTriggerPressed(ActivateEventArgs args)
+        {
+            m_IsTriggerPressed = true;
+            UpdateClutchUI();
+        }
+
+        void OnTriggerReleased(DeactivateEventArgs args)
+        {
+            m_IsTriggerPressed = false;
+            m_WasGearShifted = false;
+            UpdateClutchUI();
         }
 
         public override void ProcessInteractable(XRInteractionUpdateOrder.UpdatePhase updatePhase)
         {
             base.ProcessInteractable(updatePhase);
 
-            if (updatePhase == XRInteractionUpdateOrder.UpdatePhase.Dynamic && isSelected)
+            if (updatePhase == XRInteractionUpdateOrder.UpdatePhase.Dynamic &&
+                isSelected && !m_IsLocked && m_IsTriggerPressed)
             {
                 UpdateGearShift();
             }
@@ -95,39 +184,112 @@ namespace UnityEngine.XR.Content.Interaction
         {
             if (m_Handle == null || m_Interactor == null) return;
 
-            // Get the local position relative to the gear shift base
+            if (m_IsTransitioning)
+            {
+                m_Handle.localPosition = m_LockedPosition;
+                return;
+            }
+
             Vector3 targetPosition = transform.InverseTransformPoint(m_Interactor.GetAttachTransform(this).position);
             Vector3 newPosition = m_InitialPosition;
-            newPosition.z = Mathf.Clamp(targetPosition.z, m_GearPositions[0], m_GearPositions[^1]);
 
-            // Update handle position
+            float zOffset = Mathf.Clamp(targetPosition.z - m_BaseZPosition, m_MinPosition, m_MaxPosition);
+            newPosition.z = m_BaseZPosition + zOffset;
             m_Handle.localPosition = newPosition;
 
-            // Determine current gear based on position
-            int newGear = DetermineGearFromPosition(newPosition.z);
+            int newGear = DetermineGearFromPosition(zOffset);
             if (newGear != m_CurrentGear)
             {
-                m_CurrentGear = newGear;
-                m_OnGearChange.Invoke(m_CurrentGear);
+                StartGearTransition(newGear);
             }
         }
 
-        int DetermineGearFromPosition(float zPosition)
+        void StartGearTransition(int newGear)
         {
-            float closestDistance = float.MaxValue;
-            int closestGear = 0;
+            if (m_IsTransitioning) return;
 
-            for (int i = 0; i < m_GearPositions.Length; i++)
+            m_IsTransitioning = true;
+            m_LockedPosition = m_Handle.localPosition;
+            m_WasGearShifted = true;
+            ChangeGear(newGear);
+        }
+
+        void ChangeGear(int newGear)
+        {
+            m_CurrentGear = newGear;
+            m_OnGearChange.Invoke(m_CurrentGear);
+
+            if (m_AudioSource != null && m_GearShiftSound != null)
             {
-                float distance = Mathf.Abs(zPosition - m_GearPositions[i]);
-                if (distance < closestDistance)
+                m_AudioSource.PlayOneShot(m_GearShiftSound);
+            }
+
+            UpdateGearDisplayText();
+            StartCoroutine(LockGearCoroutine());
+        }
+
+        int DetermineGearFromPosition(float zOffset)
+        {
+            float deadzone = m_GearSpacing * 0.2f;
+            
+            for (int i = -1; i <= 5; i++)
+            {
+                float gearPosition = i * m_GearSpacing;
+                if (Mathf.Abs(zOffset - gearPosition) < deadzone)
                 {
-                    closestDistance = distance;
-                    closestGear = i - 1; // Adjust for our gear numbering (-1 to 5)
+                    return i;
                 }
             }
 
-            return closestGear;
+            return m_CurrentGear;
+        }
+
+        void UpdateGearDisplayText()
+        {
+            if (m_GearDisplayText != null)
+            {
+                int arrayIndex = m_CurrentGear + 1;
+                if (arrayIndex >= 0 && arrayIndex < m_GearDisplayStrings.Length)
+                {
+                    m_GearDisplayText.text = m_GearDisplayStrings[arrayIndex];
+                }
+            }
+        }
+
+        void UpdateClutchUI()
+        {
+            if (m_ClutchStatusText != null)
+            {
+                m_ClutchStatusText.text = m_IsTriggerPressed ? "CLUTCH: ON" : "CLUTCH: OFF";
+            }
+        }
+
+        IEnumerator LockGearCoroutine()
+        {
+            m_IsLocked = true;
+            m_IsTransitioning = true;
+
+            Vector3 targetPosition = m_InitialPosition;
+            targetPosition.z = m_BaseZPosition + m_GearOffsets[m_CurrentGear + 1];
+
+            float elapsedTime = 0f;
+            Vector3 startPosition = m_Handle.localPosition;
+
+            while (elapsedTime < m_GearLockDuration)
+            {
+                elapsedTime += Time.deltaTime;
+                float t = Mathf.SmoothStep(0, 1, elapsedTime / m_GearLockDuration);
+                m_Handle.localPosition = Vector3.Lerp(startPosition, targetPosition, t);
+                yield return null;
+            }
+
+            m_Handle.localPosition = targetPosition;
+            m_LockedPosition = targetPosition;
+
+            yield return new WaitForSeconds(0.1f);
+
+            m_IsLocked = false;
+            m_IsTransitioning = false;
         }
 
         void UpdateGearPosition(int gear)
@@ -135,7 +297,7 @@ namespace UnityEngine.XR.Content.Interaction
             if (m_Handle != null)
             {
                 Vector3 newPosition = m_InitialPosition;
-                newPosition.z = m_GearPositions[gear + 1]; // +1 to adjust for array index
+                newPosition.z = m_BaseZPosition + m_GearOffsets[gear + 1];
                 m_Handle.localPosition = newPosition;
             }
         }
